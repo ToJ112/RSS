@@ -183,32 +183,36 @@ def protocol_decode(proxy_str):
                     'ucp':True,
                     'ws-path':tmp.get('path'),
                     'ws-headers':{'Host':tmp['host']} if tmp.__contains__('host') else None,
-                    "tls": True if tmp.get("tls") == "tls" or tmp.get("net") == "h2"else False,
+                    "tls": True if tmp.get("tls") == "tls" or tmp.get("net") == "h2" or tmp.get("net") == "grpc"else False,
                 }
         except Exception as e:
             log('Invalid vmess URL:'+proxy_str)
             log(e.__str__())
     elif proxy_str_split[0] == 'ss':
-        tmp=urllib.parse.urlparse(proxy_str)
-        if tmp.username is not None:
-            server=tmp.hostname
-            port=tmp.port
-            cipher,password=base64.b64decode(tmp.username+'==').decode().split(':')
-        else:
-            tmp=base64.b64decode(tmp.netloc+'==').decode()
-            cipher,other,port=tmp.split(':')
-            password,server=other.split('@')
-        if cipher and password and server and port:
-            proxy={
-                # "name": ''.join(random.sample(string.ascii_letters + string.digits, 8)), #urllib.parse.unquote(url.fragment),
-                "name"      :   IP2name(server),
-                "type": "ss",
-                "server": server,
-                "port": port,
-                "password": password,
-                "alterId": 2,
-                "cipher": cipher,
-            }
+        try:
+            tmp=urllib.parse.urlparse(proxy_str)
+            if tmp.username is not None:
+                server=tmp.hostname
+                port=tmp.port
+                cipher,password=base64.b64decode(tmp.username+'==').decode().split(':')
+            else:
+                tmp=base64.b64decode(tmp.netloc+'==').decode()
+                cipher,other,port=tmp.split(':')
+                password,server=other.split('@')
+            if cipher and ("chacha20-poly1305" not in cipher) and password and server and port:
+                proxy={
+                    # "name": ''.join(random.sample(string.ascii_letters + string.digits, 8)), #urllib.parse.unquote(url.fragment),
+                    "name"      :   IP2name(server),
+                    "type": "ss",
+                    "server": server,
+                    "port": port,
+                    "password": password,
+                    "alterId": 2,
+                    "cipher": cipher if cipher!="ss" else "aes-128-gcm",
+                }
+        except Exception as e:
+            log('Invalid vmess URL:'+proxy_str)
+            log(e.__str__())
     elif proxy_str_split[0] == 'ssr':
         #todo
         #   - name: "ssr"
@@ -227,11 +231,24 @@ def load_subscribe_url(url):
     log('begin load_subscribe_url: '+url)
     try:
         v2rayTxt = requests.request("GET", url, verify=False)
-        return base64.b64decode(v2rayTxt.text+'==').decode('utf-8').splitlines()
+        sub=base64.b64decode(v2rayTxt.text+'==').decode('utf-8').splitlines()
+        log(f'{url} import {len(sub)} servers')
+        return sub
     except Exception as e:
         log('load_subscribe_url: '+url+': '+e.__str__())
         return []
 
+def load_subscribe_url_txt(url):
+    if not url: return []
+    log('begin load_subscribe_url: '+url)
+    try:
+        v2rayTxt = requests.request("GET", url, verify=False)
+        sub=v2rayTxt.text.splitlines()
+        log(f'{url} import {len(sub)} servers')
+        return sub
+    except Exception as e:
+        log('load_subscribe_url: '+url+': '+e.__str__())
+        return []
 
 def load_subscribe(file):
     with open(file, 'rb') as f:
@@ -264,7 +281,50 @@ def gen_clash_subscribe(proxies):
 
 def gen_v2ray_subscribe(proxies):
     with open(dirs + '/v2ray.txt','wb') as f:
-        f.write(base64.b64encode('\n'.join(proxies).encode('ascii')))
+        f.write(base64.b64encode('\n'.join(proxies).encode(encoding="ascii",errors="ignore")))
+
+def manual_input():
+    servers=''''''
+    return servers.splitlines()
+    
+def getClashSubscribeUrl(url):
+    if not url: return []
+    res=[]
+    log('begin getClashSubscribeUrl: '+url)
+    try:
+        # txt = requests.request("GET", url, verify=False)
+        # ,proxies={'https':'http://127.0.0.1:7890'}
+        txt = requests.get(url, verify=False)
+        # txt = requests.request("GET", url, verify=False)
+        raw=yaml.safe_load(txt.text)
+    except Exception as e:
+        log('getClashSubscribeUrl: '+url+': '+e.__str__())
+        return []
+    for proxy in raw["proxies"]:
+        if proxy["type"]=="ss":
+            # print(proxy)
+            res.append(f"ss://{base64.b64encode((proxy['cipher']+':'+proxy['password']).encode('utf-8')).decode('utf-8')}@{proxy['server']}:{proxy['port']}#{proxy['name']}")
+        elif proxy["type"]=="vmess":
+            # print(proxy)
+            tmp= {
+                "v": "2",
+                "ps": proxy['name'],
+                "add": proxy['server'],
+                "port": str(proxy['port']),
+                "id": proxy['uuid'],
+                "aid": "0",
+                "scy": "auto",
+                "net": proxy.get('network',''),
+                "type": "none",
+                "host": "v16.583181.xyz",
+                "path": "",
+                "tls": "tls" if proxy['tls'] else "",
+                "sni": "",
+                "alpn": ""
+                }
+            res.append(f"vmess://{base64.b64encode(bytes(json.dumps(tmp),'utf-8')).decode('utf-8')}")
+    log(f'{url} import {len(res)} servers')
+    return res
 
 # 主函数入口
 if __name__ == '__main__':
@@ -272,18 +332,62 @@ if __name__ == '__main__':
     proxies=[]
     # getSubscribeUrl()
     # proxies.extend(load_subscribe(dirs + '/v2ray.txt'))
-    proxies.extend(load_subscribe_url(get_mattkaydiary()))
+    # proxies.extend(load_subscribe_url(get_mattkaydiary()))
     # gen_clash_subscribe(list(filter(None,map(protocol_decode,proxies))))
-    proxies.extend(load_subscribe_url('https://jiang.netlify.app'))
-    proxies.extend(load_subscribe_url('https://iwxf.netlify.app'))
-    proxies.extend(load_subscribe_url('https://youlianboshi.netlify.com'))
+    # proxies.extend(load_subscribe_url('https://jiang.netlify.app'))
+    # proxies.extend(load_subscribe_url('https://sspool.herokuapp.com/ss/sub'))
+    # proxies.extend(load_subscribe_url('https://sspool.herokuapp.com/sip002/sub'))
+    # proxies.extend(load_subscribe_url('https://sspool.herokuapp.com/ssr/sub'))
+    # proxies.extend(load_subscribe_url('https://sspool.herokuapp.com/vmess/sub'))
+    # proxies.extend(load_subscribe_url('https://sspool.herokuapp.com/trojan/sub'))
     # proxies.extend(load_subscribe_url('https://fforever.github.io/v2rayfree'))
     # proxies.extend(load_subscribe_url('https://muma16fx.netlify.app'))
     # proxies.extend(load_subscribe_url('https://cdn.jsdelivr.net/gh/fggfffgbg/https-aishangyou.tube-@master/README.md'))
     # proxies.extend(load_subscribe_url('https://freev2ray.netlify.app/'))
     # proxies.extend(load_subscribe_url('https://raw.githubusercontent.com/eycorsican/rule-sets/master/kitsunebi_sub'))
-    proxies.extend(load_subscribe_url('https://sspool.herokuapp.com/vmess/sub'))
-    proxies.extend(load_subscribe_url('https://raw.githubusercontent.com/freefq/free/master/v2'))
-    # proxies.extend(load_subscribe_url(''))
-    gen_clash_subscribe(list(filter(None,map(protocol_decode,proxies))))
+
+
+    # proxies.extend(load_subscribe_url('https://iwxf.netlify.app'))
+    # proxies.extend(load_subscribe_url('https://shadowshare.v2cross.com/publicserver/servers/temp/ud4HOnWAsQxBmSIl'))   
+    # proxies.extend(load_subscribe_url('https://youlianboshi.netlify.com'))
+    # proxies.extend(load_subscribe_url('https://raw.githubusercontent.com/freefq/free/master/v2'))
+
+
+    # proxies.extend(load_subscribe_url('https://sub.xeton.dev/sub?target=v2ray&url=https://9527521.xyz/config/r619xXVEup802SRh&insert=false'))
+    # proxies.extend(load_subscribe_url('https://xn--wbs186a7vao45a8qd.v50.one/api/v1/client/subscribe?token=9249ef731acd8c150e656f6e4b77700f'))
+    # proxies.extend(load_subscribe_url('https://raw.fastgit.org/Pawdroid/Free-servers/main/sub'))
+    # proxies.extend(load_subscribe_url('https://web.anqi.ml/api/v1/client/subscribe?token=21e483aa1e50e796f543b9d63b4a27d1'))
+    
+    # proxies.extend(load_subscribe_url('https://raw.githubusercontent.com/ssrsub/ssr/master/V2Ray'))
+    # proxies.extend(load_subscribe_url('https://sub.marsix.cc/api/v1/client/subscribe?token=f6f817ddb0c62fdbaff1c90c9a074c45'))
+    # proxies.extend(load_subscribe_url('https://getinfo.bigwatermelon.org/api/v1/client/subscribe?token=8fe4290ba47b6fe0e207ead380a2396a'))
+
+    proxies.extend(load_subscribe_url_txt('https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt'))
+    # proxies.extend(load_subscribe_url('https://bulinkbulink.com/freefq/free/master/v2'))
+    # proxies.extend(load_subscribe_url('https://sub.xeton.dev/sub?target=v2ray&url=https://9527521.xyz/config/GkUDhPycfnu0TXSC&insert=false'))
+    
+    now=datetime.date.today()
+    proxies.extend(load_subscribe_url(f"https://v2rayshare.com/wp-content/uploads/{now.year:04}/{now.month:02}/{now.year:04}{now.month:02}{now.day:02}.txt"))
+    proxies.extend(load_subscribe_url(f"https://clashgithub.com/wp-content/uploads/rss/{now.year:04}{now.month:02}{now.day:02}.txt"))
+    now+=datetime.timedelta(days=-1)
+    proxies.extend(load_subscribe_url(f"https://v2rayshare.com/wp-content/uploads/{now.year:04}/{now.month:02}/{now.year:04}{now.month:02}{now.day:02}.txt"))
+    proxies.extend(load_subscribe_url(f"https://clashgithub.com/wp-content/uploads/rss/{now.year:04}{now.month:02}{now.day:02}.txt"))
+    # proxies.extend(getClashSubscribeUrl("https://raw.githubusercontent.com/freenodes/freenodes/main/clash.yaml"))
+    # localtime = time.localtime(time.time())
+    # proxies.extend(load_subscribe_url(f"https://v2rayshare.com/wp-content/uploads/{localtime.tm_year:04}/{localtime.tm_mon:02}/{localtime.tm_year:04}{localtime.tm_mon:02}{localtime.tm_mday:02}.txt"))
+    # proxies.extend(manual_input())
+
+    proxies.extend(load_subscribe_url('https://dercylee.us.kg/271828?b64'))
+    proxies.extend(load_subscribe_url('https://dercylee.us.kg/271828?sub=zrf.zrf.me'))
+    proxies.extend(load_subscribe_url('https://dercylee.us.kg/271828?sub=Trojan.fxxk.dedyn.io'))
+    proxies.extend(load_subscribe_url('https://dercylee.us.kg/271828?sub=altrojan.comorg.us.kg'))
+    proxies.extend(load_subscribe_url('https://dercylee.us.kg/271828?sub=alvless.comorg.us.kg'))
+    proxies.extend(load_subscribe_url('https://dercylee.us.kg/271828?sub=VLESS.fxxk.dedyn.io'))
+    proxies.extend(load_subscribe_url('https://oxo.o00o.ooo/ooo'))
+    
+    
+
+    proxies=list(set(proxies))
     gen_v2ray_subscribe(proxies)
+    gen_clash_subscribe(list(filter(None,map(protocol_decode,proxies))))
+    
